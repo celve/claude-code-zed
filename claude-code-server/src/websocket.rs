@@ -141,11 +141,9 @@ pub async fn run_websocket_server_full(
     while let Ok((stream, peer_addr)) = listener.accept().await {
         info!("New connection from {}", peer_addr);
         let auth_token_clone = auth_token.clone();
-        let notification_receiver_clone = if let Some(ref mut receiver) = notification_receiver {
-            Some(receiver.resubscribe())
-        } else {
-            None
-        };
+        let notification_receiver_clone = notification_receiver
+            .as_mut()
+            .map(|receiver| receiver.resubscribe());
         let worktree_clone = worktree.clone();
         tokio::spawn(handle_connection(
             stream,

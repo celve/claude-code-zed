@@ -1,193 +1,80 @@
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fs;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::broadcast;
 use tower_lsp::jsonrpc::Result as LspResult;
 use tower_lsp::lsp_types::*;
-use tower_lsp::{Client, LanguageServer, LspService, Server};
-use tracing::{debug, error, info, warn};
+use tower_lsp::LanguageServer;
+use tracing::info;
 
-#[cfg(unix)]
-use std::os::unix::process::parent_id;
-
-// Notification structures for IDE to Claude communication
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SelectionChangedNotification {
-    pub text: String,
-    #[serde(rename = "filePath")]
-    pub file_path: String,
-    #[serde(rename = "fileUrl")]
-    pub file_url: String,
-    pub selection: SelectionInfo,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SelectionInfo {
-    pub start: Position,
-    pub end: Position,
-    #[serde(rename = "isEmpty")]
-    pub is_empty: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AtMentionedNotification {
-    #[serde(rename = "filePath")]
-    pub file_path: String,
-    #[serde(rename = "lineStart")]
-    pub line_start: u32,
-    #[serde(rename = "lineEnd")]
-    pub line_end: u32,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct JsonRpcNotification {
-    pub jsonrpc: String,
-    pub method: String,
-    pub params: serde_json::Value,
-}
-
-// Channel for sending notifications from LSP to MCP
-pub type NotificationSender = broadcast::Sender<JsonRpcNotification>;
-pub type NotificationReceiver = broadcast::Receiver<JsonRpcNotification>;
-
-#[derive(Debug)]
-pub struct ClaudeCodeLanguageServer {
-    client: Client,
-    worktree: Option<PathBuf>,
-    notification_sender: Option<Arc<NotificationSender>>,
-}
-
-impl ClaudeCodeLanguageServer {
-    pub fn new(client: Client, worktree: Option<PathBuf>) -> Self {
-        Self {
-            client,
-            worktree,
-            notification_sender: None,
-        }
-    }
-
-    pub fn with_notification_sender(mut self, sender: Arc<NotificationSender>) -> Self {
-        self.notification_sender = Some(sender);
-        self
-    }
-
-    async fn send_notification(&self, method: &str, params: serde_json::Value) {
-        if let Some(sender) = &self.notification_sender {
-            let notification = JsonRpcNotification {
-                jsonrpc: "2.0".to_string(),
-                method: method.to_string(),
-                params,
-            };
-
-            if let Err(e) = sender.send(notification) {
-                debug!("Failed to send notification: {}", e);
-            }
-        }
-    }
-
-    // Convert LSP UTF-16 code unit position to Rust UTF-8 byte position
-    // LSP uses UTF-16 code units for character positions per the specification
-    fn char_pos_to_byte_pos(line: &str, utf16_pos: usize) -> Option<usize> {
-        let mut current_utf16_pos = 0;
-        
-        for (byte_pos, ch) in line.char_indices() {
-            if current_utf16_pos == utf16_pos {
-                return Some(byte_pos);
-            }
-            
-            let char_utf16_len = ch.len_utf16();
-            
-            // If utf16_pos falls within this character's UTF-16 span, return this char's byte position
-            if utf16_pos < current_utf16_pos + char_utf16_len {
-                return Some(byte_pos);
-            }
-            
-            current_utf16_pos += char_utf16_len;
-        }
-        
-        // If utf16_pos is at the end of the string
-        if current_utf16_pos == utf16_pos {
-            return Some(line.len());
-        }
-        
-        None
-    }
-
-    fn read_text_from_range(&self, file_path: &str, range: Range) -> String {
-        let file_path = if file_path.starts_with("file://") {
-            &file_path[7..] // Remove "file://" prefix
-        } else {
-            file_path
-        };
-
-        match fs::read_to_string(file_path) {
-            Ok(content) => {
-                let lines: Vec<&str> = content.lines().collect();
-
-                // Handle single line selection
-                if range.start.line == range.end.line {
-                    if let Some(line) = lines.get(range.start.line as usize) {
-                        let start_char = range.start.character as usize;
-                        let end_char = range.end.character as usize;
-
-                        if let (Some(start_byte), Some(end_byte)) = 
-                            (Self::char_pos_to_byte_pos(line, start_char),
-                             Self::char_pos_to_byte_pos(line, end_char)) {
-                            if start_byte <= end_byte {
-                                return line[start_byte..end_byte].to_string();
-                            }
-                        }
-                    }
-                } else {
-                    // Handle multi-line selection
-                    let mut selected_text = String::new();
-
-                    for (i, line_index) in (range.start.line..=range.end.line).enumerate() {
-                        if let Some(line) = lines.get(line_index as usize) {
-                            if i == 0 {
-                                // First line - from start character to end
-                                let start_char = range.start.character as usize;
-                                if let Some(start_byte) = Self::char_pos_to_byte_pos(line, start_char) {
-                                    selected_text.push_str(&line[start_byte..]);
-                                }
-                            } else if line_index == range.end.line {
-                                // Last line - from start to end character
-                                let end_char = range.end.character as usize;
-                                if let Some(end_byte) = Self::char_pos_to_byte_pos(line, end_char) {
-                                    selected_text.push_str(&line[..end_byte]);
-                                }
-                            } else {
-                                // Middle lines - entire line
-                                selected_text.push_str(line);
-                            }
-
-                            // Add newline except for the last line
-                            if line_index < range.end.line {
-                                selected_text.push('\n');
-                            }
-                        }
-                    }
-
-                    return selected_text;
-                }
-            }
-            Err(e) => {
-                warn!("Failed to read file {}: {}", file_path, e);
-            }
-        }
-
-        String::new()
-    }
-}
+use super::notifications::{AtMentionedNotification, SelectionChangedNotification, SelectionInfo};
+use super::server::ClaudeCodeLanguageServer;
+use super::utils::read_text_from_range;
 
 #[tower_lsp::async_trait]
 impl LanguageServer for ClaudeCodeLanguageServer {
     async fn initialize(&self, params: InitializeParams) -> LspResult<InitializeResult> {
         info!("LSP Server initializing...");
+
+        // Log client capabilities to understand what Zed supports
+        info!("=== Client Capabilities ===");
+
+        // Window capabilities (includes showDocument for LSP 3.16+)
+        if let Some(window) = &params.capabilities.window {
+            info!("Window capabilities: {:?}", window);
+            if let Some(show_document) = &window.show_document {
+                info!("  showDocument support: {:?}", show_document);
+            } else {
+                info!("  showDocument: NOT SUPPORTED");
+            }
+            if let Some(work_done_progress) = &window.work_done_progress {
+                info!("  workDoneProgress: {}", work_done_progress);
+            }
+        } else {
+            info!("Window capabilities: NONE");
+        }
+
+        // Workspace capabilities
+        if let Some(workspace) = &params.capabilities.workspace {
+            info!("Workspace capabilities:");
+            if let Some(apply_edit) = &workspace.apply_edit {
+                info!("  applyEdit: {}", apply_edit);
+            }
+            if let Some(workspace_edit) = &workspace.workspace_edit {
+                info!("  workspaceEdit: {:?}", workspace_edit);
+            }
+            if let Some(did_change_config) = &workspace.did_change_configuration {
+                info!("  didChangeConfiguration: {:?}", did_change_config);
+            }
+            if let Some(workspace_folders) = &workspace.workspace_folders {
+                info!("  workspaceFolders: {}", workspace_folders);
+            }
+        }
+
+        // Text document capabilities
+        if let Some(text_doc) = &params.capabilities.text_document {
+            info!("TextDocument capabilities (summary):");
+            if text_doc.synchronization.is_some() {
+                info!("  synchronization: supported");
+            }
+            if text_doc.completion.is_some() {
+                info!("  completion: supported");
+            }
+            if text_doc.hover.is_some() {
+                info!("  hover: supported");
+            }
+            if text_doc.code_action.is_some() {
+                info!("  codeAction: supported");
+            }
+            if text_doc.publish_diagnostics.is_some() {
+                info!("  publishDiagnostics: supported");
+            }
+        }
+
+        // General capabilities (LSP version info)
+        if let Some(general) = &params.capabilities.general {
+            info!("General capabilities: {:?}", general);
+        }
+
+        info!("=== End Client Capabilities ===");
+
         if let Some(workspace_folders) = &params.workspace_folders {
             for folder in workspace_folders {
                 info!("Workspace folder: {}", folder.uri);
@@ -324,8 +211,7 @@ impl LanguageServer for ClaudeCodeLanguageServer {
         info!("Code action requested for range: {:?}", params.range);
 
         // Send selection_changed notification when code action is requested
-        let selected_text =
-            self.read_text_from_range(params.text_document.uri.path(), params.range);
+        let selected_text = read_text_from_range(params.text_document.uri.path(), params.range);
         let selection_notification = SelectionChangedNotification {
             text: selected_text,
             file_path: params.text_document.uri.path().to_string(),
@@ -492,7 +378,7 @@ impl LanguageServer for ClaudeCodeLanguageServer {
                 },
             };
             let selected_text =
-                self.read_text_from_range(params.text_document.uri.path(), selection_range);
+                read_text_from_range(params.text_document.uri.path(), selection_range);
             let selection_notification = SelectionChangedNotification {
                 text: selected_text,
                 file_path: params.text_document.uri.path().to_string(),
@@ -516,81 +402,4 @@ impl LanguageServer for ClaudeCodeLanguageServer {
 
         Ok(Some(ranges))
     }
-}
-
-pub async fn run_lsp_server(worktree: Option<PathBuf>) -> Result<()> {
-    run_lsp_server_with_notifications(worktree, None).await
-}
-
-/// Spawn a watchdog task that monitors the parent process.
-/// If the parent process dies (we get reparented to init/launchd), exit gracefully.
-/// This helps detect when Zed disconnects after Mac sleep/wake.
-#[cfg(unix)]
-fn spawn_parent_watchdog() -> tokio::task::JoinHandle<()> {
-    let initial_ppid = parent_id();
-    info!(
-        "Starting parent process watchdog (initial PPID: {})",
-        initial_ppid
-    );
-
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-
-            let current_ppid = parent_id();
-
-            // If parent PID changed, our original parent (Zed) has died
-            // On Unix, orphaned processes are reparented to init (PID 1) or launchd
-            if current_ppid != initial_ppid {
-                error!(
-                    "Parent process changed from {} to {} - parent likely died, exiting",
-                    initial_ppid, current_ppid
-                );
-                std::process::exit(0);
-            }
-
-            // Also check if reparented to init (PID 1) which means parent definitely died
-            if current_ppid == 1 {
-                error!("Reparented to init (PPID=1) - parent died, exiting");
-                std::process::exit(0);
-            }
-        }
-    })
-}
-
-#[cfg(not(unix))]
-fn spawn_parent_watchdog() -> tokio::task::JoinHandle<()> {
-    // On non-Unix platforms, just return a no-op task
-    tokio::spawn(async {
-        // No parent monitoring on Windows
-        std::future::pending::<()>().await;
-    })
-}
-
-pub async fn run_lsp_server_with_notifications(
-    worktree: Option<PathBuf>,
-    notification_sender: Option<Arc<NotificationSender>>,
-) -> Result<()> {
-    info!("Starting LSP server mode");
-    if let Some(path) = &worktree {
-        info!("Worktree path: {}", path.display());
-    }
-
-    // Spawn watchdog to detect parent process death (e.g., after Mac sleep/wake)
-    let _watchdog = spawn_parent_watchdog();
-
-    let stdin = tokio::io::stdin();
-    let stdout = tokio::io::stdout();
-
-    let (service, socket) = LspService::new(|client| {
-        let mut server = ClaudeCodeLanguageServer::new(client, worktree.clone());
-        if let Some(sender) = notification_sender.clone() {
-            server = server.with_notification_sender(sender);
-        }
-        server
-    });
-    Server::new(stdin, stdout, socket).serve(service).await;
-
-    info!("LSP server stopped");
-    Ok(())
 }
