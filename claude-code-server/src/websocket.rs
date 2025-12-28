@@ -146,11 +146,13 @@ pub async fn run_websocket_server_full(
         } else {
             None
         };
+        let worktree_clone = worktree.clone();
         tokio::spawn(handle_connection(
             stream,
             peer_addr,
             auth_token_clone,
             notification_receiver_clone,
+            worktree_clone,
         ));
     }
 
@@ -217,6 +219,7 @@ async fn handle_connection(
     peer_addr: SocketAddr,
     auth_token: String,
     notification_receiver: Option<NotificationReceiver>,
+    worktree: Option<PathBuf>,
 ) -> Result<()> {
     info!("Handling connection from {}", peer_addr);
 
@@ -247,7 +250,8 @@ async fn handle_connection(
         }
     };
 
-    handle_websocket_connection(ws_stream, peer_addr, auth_token, notification_receiver).await
+    handle_websocket_connection(ws_stream, peer_addr, auth_token, notification_receiver, worktree)
+        .await
 }
 
 async fn handle_websocket_connection(
@@ -255,12 +259,13 @@ async fn handle_websocket_connection(
     peer_addr: SocketAddr,
     _auth_token: String,
     mut notification_receiver: Option<NotificationReceiver>,
+    worktree: Option<PathBuf>,
 ) -> Result<()> {
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
     // Give MCPServer its own notification receiver so it can track selection state
     let mcp_receiver = notification_receiver.as_ref().map(|r| r.resubscribe());
-    let mcp_handler = MCPServer::with_notifications(mcp_receiver);
+    let mcp_handler = MCPServer::with_notifications(mcp_receiver, worktree);
 
     info!("WebSocket connection established with {}", peer_addr);
 

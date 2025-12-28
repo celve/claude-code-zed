@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
@@ -102,14 +103,18 @@ pub struct SelectionPosition {
 pub struct MCPServer {
     capabilities: ServerCapabilities,
     selection_state: Arc<RwLock<Option<SelectionState>>>,
+    worktree: Option<PathBuf>,
 }
 
 impl MCPServer {
     pub fn new() -> Self {
-        Self::with_notifications(None)
+        Self::with_notifications(None, None)
     }
 
-    pub fn with_notifications(receiver: Option<NotificationReceiver>) -> Self {
+    pub fn with_notifications(
+        receiver: Option<NotificationReceiver>,
+        worktree: Option<PathBuf>,
+    ) -> Self {
         let capabilities = ServerCapabilities {
             tools: Some(ToolsCapability {
                 list_changed: Some(true),
@@ -141,6 +146,7 @@ impl MCPServer {
         Self {
             capabilities,
             selection_state,
+            worktree,
         }
     }
 
@@ -231,9 +237,16 @@ impl MCPServer {
                 }]
             }
             "get_workspace_info" => {
-                let workspace_info = std::env::current_dir()
-                    .map(|path| path.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| "Unknown workspace".to_string());
+                let workspace_info = self
+                    .worktree
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .or_else(|| {
+                        std::env::current_dir()
+                            .ok()
+                            .map(|p| p.to_string_lossy().to_string())
+                    })
+                    .unwrap_or_else(|| "Unknown workspace".to_string());
 
                 vec![TextContent {
                     type_: "text".to_string(),
@@ -330,9 +343,16 @@ impl MCPServer {
                 }]
             }
             "getWorkspaceFolders" => {
-                let workspace_info = std::env::current_dir()
-                    .map(|path| path.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| "Unknown workspace".to_string());
+                let workspace_info = self
+                    .worktree
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .or_else(|| {
+                        std::env::current_dir()
+                            .ok()
+                            .map(|p| p.to_string_lossy().to_string())
+                    })
+                    .unwrap_or_else(|| "Unknown workspace".to_string());
 
                 info!("Getting workspace folders");
 
