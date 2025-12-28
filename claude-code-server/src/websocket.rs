@@ -257,7 +257,10 @@ async fn handle_websocket_connection(
     mut notification_receiver: Option<NotificationReceiver>,
 ) -> Result<()> {
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
-    let mcp_handler = MCPServer::new();
+
+    // Give MCPServer its own notification receiver so it can track selection state
+    let mcp_receiver = notification_receiver.as_ref().map(|r| r.resubscribe());
+    let mcp_handler = MCPServer::with_notifications(mcp_receiver);
 
     info!("WebSocket connection established with {}", peer_addr);
 

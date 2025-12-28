@@ -1,7 +1,11 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::{debug, info};
+
+use crate::lsp::NotificationReceiver;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MCPRequest {
@@ -71,12 +75,41 @@ pub struct TextContent {
     pub text: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SelectionState {
+    pub text: String,
+    #[serde(rename = "filePath")]
+    pub file_path: String,
+    #[serde(rename = "fileUrl")]
+    pub file_url: String,
+    pub selection: SelectionRange,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SelectionRange {
+    pub start: SelectionPosition,
+    pub end: SelectionPosition,
+    #[serde(rename = "isEmpty")]
+    pub is_empty: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SelectionPosition {
+    pub line: u32,
+    pub character: u32,
+}
+
 pub struct MCPServer {
     capabilities: ServerCapabilities,
+    selection_state: Arc<RwLock<Option<SelectionState>>>,
 }
 
 impl MCPServer {
     pub fn new() -> Self {
+        Self::with_notifications(None)
+    }
+
+    pub fn with_notifications(receiver: Option<NotificationReceiver>) -> Self {
         let capabilities = ServerCapabilities {
             tools: Some(ToolsCapability {
                 list_changed: Some(true),
@@ -87,7 +120,28 @@ impl MCPServer {
             logging: Some(LoggingCapability {}),
         };
 
-        Self { capabilities }
+        let selection_state = Arc::new(RwLock::new(None));
+
+        // Spawn background task to listen for notifications
+        if let Some(mut rx) = receiver {
+            let state = selection_state.clone();
+            tokio::spawn(async move {
+                while let Ok(notification) = rx.recv().await {
+                    if notification.method == "selection_changed" {
+                        if let Ok(selection) =
+                            serde_json::from_value::<SelectionState>(notification.params.clone())
+                        {
+                            *state.write().await = Some(selection);
+                        }
+                    }
+                }
+            });
+        }
+
+        Self {
+            capabilities,
+            selection_state,
+        }
     }
 
     pub async fn handle_request(&self, request: MCPRequest) -> Result<MCPResponse> {
@@ -241,11 +295,21 @@ impl MCPServer {
             "getCurrentSelection" => {
                 info!("Getting current selection");
 
-                // Return JSON-stringified response according to protocol
-                let response = serde_json::json!({
-                    "success": false,
-                    "message": "No active editor found"
-                });
+                let state = self.selection_state.read().await;
+                let response = if let Some(selection) = state.as_ref() {
+                    serde_json::json!({
+                        "success": true,
+                        "text": selection.text,
+                        "filePath": selection.file_path,
+                        "fileUrl": selection.file_url,
+                        "selection": selection.selection
+                    })
+                } else {
+                    serde_json::json!({
+                        "success": false,
+                        "message": "No active editor found"
+                    })
+                };
 
                 vec![TextContent {
                     type_: "text".to_string(),
@@ -326,11 +390,21 @@ impl MCPServer {
             "getLatestSelection" => {
                 info!("Getting latest selection");
 
-                // Return JSON-stringified response according to protocol
-                let response = serde_json::json!({
-                    "success": false,
-                    "message": "No selection available"
-                });
+                let state = self.selection_state.read().await;
+                let response = if let Some(selection) = state.as_ref() {
+                    serde_json::json!({
+                        "success": true,
+                        "text": selection.text,
+                        "filePath": selection.file_path,
+                        "fileUrl": selection.file_url,
+                        "selection": selection.selection
+                    })
+                } else {
+                    serde_json::json!({
+                        "success": false,
+                        "message": "No selection available"
+                    })
+                };
 
                 vec![TextContent {
                     type_: "text".to_string(),
