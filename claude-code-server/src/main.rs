@@ -8,7 +8,7 @@ mod mcp;
 mod websocket;
 
 use lsp::{run_lsp_server, run_lsp_server_with_notifications};
-use websocket::{run_websocket_server, run_websocket_server_with_notifications};
+use websocket::{cleanup_lock_file, run_websocket_server, run_websocket_server_full};
 
 #[derive(Parser)]
 #[command(name = "claude-code-server")]
@@ -117,16 +117,26 @@ async fn run_hybrid_server(port: Option<u16>, worktree: Option<PathBuf>) -> Resu
     let (notification_sender, notification_receiver) = tokio::sync::broadcast::channel(100);
     let notification_sender = std::sync::Arc::new(notification_sender);
 
+    // Create channel to receive the actual bound port from WebSocket server
+    let (port_sender, port_receiver) = tokio::sync::oneshot::channel::<u16>();
+
     // In hybrid mode, we run both servers with notification bridge
-    let websocket_handle = tokio::spawn(run_websocket_server_with_notifications(
-        port, 
-        worktree.clone(), 
-        Some(notification_receiver)
+    let websocket_handle = tokio::spawn(run_websocket_server_full(
+        port,
+        worktree.clone(),
+        Some(notification_receiver),
+        Some(port_sender),
     ));
     let lsp_handle = tokio::spawn(run_lsp_server_with_notifications(
-        worktree, 
-        Some(notification_sender)
+        worktree,
+        Some(notification_sender),
     ));
+
+    // Wait to receive the actual port from WebSocket server
+    let actual_port = port_receiver.await.ok();
+    if let Some(p) = actual_port {
+        info!("WebSocket server bound to port {}", p);
+    }
 
     // Wait for either to complete (or fail)
     tokio::select! {
@@ -142,6 +152,14 @@ async fn run_hybrid_server(port: Option<u16>, worktree: Option<PathBuf>) -> Resu
                 Ok(Ok(())) => info!("LSP server completed"),
                 Ok(Err(e)) => error!("LSP server error: {}", e),
                 Err(e) => error!("LSP server task panicked: {}", e),
+            }
+
+            // LSP server exited - clean up the WebSocket server's lock file
+            if let Some(p) = actual_port {
+                info!("LSP server exited, cleaning up lock file for port {}", p);
+                if let Err(e) = cleanup_lock_file(p).await {
+                    error!("Failed to cleanup lock file: {}", e);
+                }
             }
         }
     }

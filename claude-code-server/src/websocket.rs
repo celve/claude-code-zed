@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use crate::lsp::NotificationReceiver;
 use crate::mcp::{MCPRequest, MCPResponse, MCPServer};
+use tokio::sync::oneshot;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LockFile {
@@ -43,61 +44,95 @@ pub async fn run_websocket_server_with_worktree(
     run_websocket_server_with_notifications(port, worktree, None).await
 }
 
+// Default port range for dynamic allocation
+const DEFAULT_PORT_START: u16 = 59792;
+const DEFAULT_PORT_END: u16 = 59892; // Allow up to 100 concurrent instances
+
+/// Try to bind to a port in the given range, returning the listener and the actual port
+async fn find_available_port(
+    preferred_port: Option<u16>,
+    port_start: u16,
+    port_end: u16,
+) -> Result<(TcpListener, u16)> {
+    // If a specific port is requested, try it first
+    if let Some(port) = preferred_port {
+        let addr = format!("127.0.0.1:{}", port);
+        if let Ok(listener) = TcpListener::bind(&addr).await {
+            info!("Bound to requested port {}", port);
+            return Ok((listener, port));
+        }
+        warn!(
+            "Requested port {} is unavailable, trying dynamic allocation",
+            port
+        );
+    }
+
+    // Try ports in the range until we find an available one
+    for port in port_start..=port_end {
+        let addr = format!("127.0.0.1:{}", port);
+        match TcpListener::bind(&addr).await {
+            Ok(listener) => {
+                info!("Found available port: {}", port);
+                return Ok((listener, port));
+            }
+            Err(_) => {
+                // Port in use, try next one
+                continue;
+            }
+        }
+    }
+
+    Err(anyhow!(
+        "No available ports in range {}-{}",
+        port_start,
+        port_end
+    ))
+}
+
 pub async fn run_websocket_server_with_notifications(
     port: Option<u16>,
     worktree: Option<PathBuf>,
+    notification_receiver: Option<NotificationReceiver>,
+) -> Result<()> {
+    run_websocket_server_full(port, worktree, notification_receiver, None).await
+}
+
+/// Run WebSocket server with optional port reporting for coordinated shutdown.
+///
+/// When `port_sender` is provided, the actual bound port is sent back to the caller,
+/// enabling proper lock file cleanup when the server is shut down externally (e.g., LSP exit).
+pub async fn run_websocket_server_full(
+    port: Option<u16>,
+    worktree: Option<PathBuf>,
     mut notification_receiver: Option<NotificationReceiver>,
+    port_sender: Option<oneshot::Sender<u16>>,
 ) -> Result<()> {
     info!("Starting WebSocket server...");
 
-    // Use fixed port or provided port, default to 59792
-    let port = port.unwrap_or(59792);
+    // Find an available port (use dynamic allocation if preferred port is unavailable)
+    let (listener, actual_port) =
+        find_available_port(port, DEFAULT_PORT_START, DEFAULT_PORT_END).await?;
 
-    // Clean up any existing lock files for this port
-    cleanup_existing_lock_file(port).await?;
+    info!("WebSocket server listening on 127.0.0.1:{}", actual_port);
 
-    // Create new lock file
+    // Report the bound port back to caller (for coordinated cleanup)
+    if let Some(sender) = port_sender {
+        let _ = sender.send(actual_port);
+    }
+
+    // Clean up any stale lock file for this port (from crashed processes)
+    cleanup_lock_file(actual_port).await?;
+
+    // Create new lock file with the actual bound port
     let auth_token = Uuid::new_v4().to_string();
-    create_lock_file(port, worktree.clone(), &auth_token).await?;
+    create_lock_file(actual_port, worktree.clone(), &auth_token).await?;
 
-    // Start WebSocket server with proper error handling
-    let addr = format!("127.0.0.1:{}", port);
-
-    // Try to bind to the port, with retry logic
-    let listener = match TcpListener::bind(&addr).await {
-        Ok(listener) => {
-            info!("WebSocket server listening on {}", addr);
-            listener
-        }
-        Err(e) => {
-            error!("Failed to bind to port {}: {}", port, e);
-            info!("Attempting to force cleanup and retry...");
-
-            // Try to cleanup and retry once
-            cleanup_existing_lock_file(port).await?;
-
-            // Wait a moment for the port to be released
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-            match TcpListener::bind(&addr).await {
-                Ok(listener) => {
-                    info!("Successfully bound to port {} after cleanup", port);
-                    listener
-                }
-                Err(e2) => {
-                    error!("Failed to bind to port {} even after cleanup: {}", port, e2);
-                    return Err(anyhow!("Port {} is unavailable: {}", port, e2));
-                }
-            }
-        }
-    };
-
-    // Setup graceful shutdown handler
-    let port_for_cleanup = port;
+    // Setup graceful shutdown handler for Ctrl+C
+    let port_for_cleanup = actual_port;
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
         info!("Shutdown signal received, cleaning up...");
-        if let Err(e) = cleanup_existing_lock_file(port_for_cleanup).await {
+        if let Err(e) = cleanup_lock_file(port_for_cleanup).await {
             error!("Error during cleanup: {}", e);
         }
         std::process::exit(0);
@@ -122,7 +157,9 @@ pub async fn run_websocket_server_with_notifications(
     Ok(())
 }
 
-async fn cleanup_existing_lock_file(port: u16) -> Result<()> {
+/// Clean up the lock file for the given port.
+/// This should be called when the server shuts down to remove stale lock files.
+pub async fn cleanup_lock_file(port: u16) -> Result<()> {
     let home = home_dir().ok_or_else(|| anyhow!("Could not find home directory"))?;
     let claude_dir = home.join(".claude").join("ide");
 
