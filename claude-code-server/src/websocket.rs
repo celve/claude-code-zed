@@ -29,6 +29,8 @@ pub struct LockFile {
     #[serde(rename = "ideName")]
     pub ide_name: String,
     pub transport: String,
+    #[serde(rename = "runningInWindows")]
+    pub running_in_windows: bool,
     #[serde(rename = "authToken")]
     pub auth_token: String,
 }
@@ -198,8 +200,9 @@ async fn create_lock_file(port: u16, worktree: Option<PathBuf>, auth_token: &str
     let lock_file_data = LockFile {
         pid: process::id(),
         workspace_folders: vec![workspace_folder],
-        ide_name: "claude-code-server".to_string(),
+        ide_name: "Zed".to_string(),
         transport: "ws".to_string(),
+        running_in_windows: false,
         auth_token: auth_token.to_string(),
     };
 
