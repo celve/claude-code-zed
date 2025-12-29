@@ -1,15 +1,3 @@
-# ⚠️ ARCHIVED: Claude Code Zed Integration
-
-> **This repository has been archived and is no longer actively maintained.**
-> 
-> **We now focus on VSCode integration for Claude Code CLI.** If you're looking for Claude Code editor integration, we recommend using VSCode instead of Zed.
-> 
-> **Thank you to everyone who starred this repository and supported our work!** 🙏
-> 
-> If you want to continue development of Zed integration, feel free to fork this repository and build upon this codebase.
-
----
-
 # Claude Code Zed Integration
 
 A two-part system that integrates Claude Code CLI with Zed editor for AI-assisted coding.
