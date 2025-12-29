@@ -51,7 +51,7 @@ impl MCPServer {
         }
 
         Ok(serde_json::json!({
-            "protocolVersion": "2025-03-26",
+            "protocolVersion": "2024-11-05",
             "capabilities": self.capabilities,
             "serverInfo": ServerInfo {
                 name: "claude-code-server".to_string(),
@@ -63,7 +63,50 @@ impl MCPServer {
     async fn handle_tools_list(&self) -> Result<Value> {
         info!("Listing available tools");
 
-        let tools: Vec<Tool> = vec![];
+        // Only list tools that are actually implemented and working
+        let tools: Vec<Tool> = vec![
+            Tool {
+                name: "getCurrentSelection".to_string(),
+                description: Some("Get the current text selection in the active editor".to_string()),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+            },
+            Tool {
+                name: "getLatestSelection".to_string(),
+                description: Some("Get the most recent text selection".to_string()),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+            },
+            Tool {
+                name: "getWorkspaceFolders".to_string(),
+                description: Some("Get the workspace folders open in the IDE".to_string()),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+            },
+            Tool {
+                name: "getDiagnostics".to_string(),
+                description: Some("Get diagnostics (errors, warnings) for files in the workspace".to_string()),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "uri": {
+                            "type": "string",
+                            "description": "Optional URI of a specific file to get diagnostics for"
+                        }
+                    },
+                    "required": []
+                }),
+            },
+        ];
 
         Ok(serde_json::json!({
             "tools": tools

@@ -3,23 +3,6 @@ use tracing::info;
 
 use crate::mcp::types::TextContent;
 
-pub fn get_workspace_info(worktree: &Option<PathBuf>) -> Vec<TextContent> {
-    let workspace_info = worktree
-        .as_ref()
-        .map(|p| p.to_string_lossy().to_string())
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .map(|p| p.to_string_lossy().to_string())
-        })
-        .unwrap_or_else(|| "Unknown workspace".to_string());
-
-    vec![TextContent {
-        type_: "text".to_string(),
-        text: format!("Current workspace: {}", workspace_info),
-    }]
-}
-
 pub fn get_workspace_folders(worktree: &Option<PathBuf>) -> Vec<TextContent> {
     let workspace_info = worktree
         .as_ref()
