@@ -123,9 +123,18 @@ impl Extension for ClaudeCodeExtension {
 fn find_server_binary(worktree: &Worktree) -> Result<String, String> {
     let worktree_root = worktree.root_path();
 
-    eprintln!("🔍 [DEBUG] find_server_binary called with worktree_root: {}", worktree_root);
-    eprintln!("🔍 [DEBUG] FORCE_DEVELOPMENT_MODE: {}", FORCE_DEVELOPMENT_MODE);
-    eprintln!("🔍 [DEBUG] Checking if '{}' contains 'claude-code-zed'", worktree_root);
+    eprintln!(
+        "🔍 [DEBUG] find_server_binary called with worktree_root: {}",
+        worktree_root
+    );
+    eprintln!(
+        "🔍 [DEBUG] FORCE_DEVELOPMENT_MODE: {}",
+        FORCE_DEVELOPMENT_MODE
+    );
+    eprintln!(
+        "🔍 [DEBUG] Checking if '{}' contains 'claude-code-zed'",
+        worktree_root
+    );
 
     // For development: look for manually copied binary in extension work directory
     // Check both the directory name AND the development flag
@@ -135,25 +144,35 @@ fn find_server_binary(worktree: &Worktree) -> Result<String, String> {
         } else {
             eprintln!("✅ [DEBUG] Detected development environment (claude-code-zed in path)");
         }
-        
+
         // Check for manually copied development binary in extension work directory
         // This allows developers to use their local build with fixes
-        let dev_binary_name = get_platform_binary_name().unwrap_or("claude-code-server".to_string());
-        eprintln!("🔍 [DEBUG] Looking for development binary: {}", dev_binary_name);
-        
+        let dev_binary_name =
+            get_platform_binary_name().unwrap_or("claude-code-server".to_string());
+        eprintln!(
+            "🔍 [DEBUG] Looking for development binary: {}",
+            dev_binary_name
+        );
+
         // The binary should be manually copied to the extension work directory
         // We'll return the expected path and let the download logic handle it
         eprintln!("💡 [INFO] Development mode detected!");
         eprintln!("📋 [INFO] To use your local development build:");
         eprintln!("   1. Build the server: cd claude-code-server && cargo build");
-        eprintln!("   2. Copy binary to: ~/.../Zed/extensions/work/claude-code-zed/{}", dev_binary_name);
+        eprintln!(
+            "   2. Copy binary to: ~/.../Zed/extensions/work/claude-code-zed/{}",
+            dev_binary_name
+        );
         eprintln!("   3. Or let the extension download the GitHub release");
-        
+
         // Return the expected path - download_server_binary will handle checking if it exists
         return Ok(dev_binary_name);
     } else {
         eprintln!("ℹ️ [INFO] Not in development environment, downloading from GitHub releases");
-        eprintln!("🔍 [DEBUG] Worktree path '{}' does not contain 'claude-code-zed'", worktree_root);
+        eprintln!(
+            "🔍 [DEBUG] Worktree path '{}' does not contain 'claude-code-zed'",
+            worktree_root
+        );
     }
 
     // For production: download binary from GitHub releases
@@ -162,7 +181,7 @@ fn find_server_binary(worktree: &Worktree) -> Result<String, String> {
 
 /// Download claude-code-server binary from GitHub releases
 fn download_server_binary() -> Result<String, String> {
-    const GITHUB_REPO: &str = "jiahaoxiang2000/claude-code-zed";
+    const GITHUB_REPO: &str = "celve/claude-code-zed";
 
     // Determine platform-specific binary name
     let binary_name = match get_platform_binary_name() {
@@ -180,12 +199,12 @@ fn download_server_binary() -> Result<String, String> {
     if std::path::Path::new(&binary_name).exists() {
         eprintln!("✅ [SUCCESS] Found existing binary: {}", binary_name);
         eprintln!("🔧 [INFO] Using manually copied development binary");
-        
+
         // Make sure it's executable
         if let Err(e) = make_file_executable(&binary_name) {
             eprintln!("⚠️ [WARNING] Failed to make binary executable: {}", e);
         }
-        
+
         return Ok(binary_name);
     }
 
