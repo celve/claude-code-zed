@@ -37,7 +37,7 @@ The following tools are exposed to Claude Code CLI:
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/jiahaoxiang2000/claude-code-zed.git
+   git clone https://github.com/celve/claude-code-zed.git
    ```
 
 2. **Install the Zed extension** (Development Mode):
@@ -437,4 +437,4 @@ This is particularly useful for troubleshooting connection issues or understandi
 2. The Claude Code CLI will show IDE integration status
 3. Text selections in Zed will be visible to Claude Code CLI
 
-If you continue experiencing issues, please [open an issue](https://github.com/jiahaoxiang2000/claude-code-zed/issues) with your error details and system information.
+If you continue experiencing issues, please [open an issue](https://github.com/celve/claude-code-zed/issues) with your error details and system information.
