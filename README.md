@@ -18,14 +18,26 @@ A two-part system that integrates Claude Code CLI with Zed editor for AI-assiste
 
 ## Current Integration Status
 
-### ✅ Working Features
+### Working Features
 - **Text Selection Sharing**: Zed can send selected text context to Claude Code CLI
+- **Selection State Persistence**: Selection state is maintained across interactions
 - **File Reference Handling**: Selected code snippets and file paths are transmitted
+- **Workspace Info**: Claude Code can query workspace folders via `getWorkspaceFolders`
+- **Multi-Project Support**: Each project gets its own isolated LSP instance
+- **Stale Connection Handling**: Watchdog automatically exits LSP if connection becomes stale
 - **WebSocket Communication**: Stable connection between Zed and Claude Code CLI
 
-### 🚧 Limitations
-- **LSP Diagnostics**: Currently NOT implemented - Zed extension works as LSP client but doesn't expose IDE diagnostic information (errors, warnings, type hints) to Claude Code CLI
-- **One-way Communication**: Primary flow is Zed → Claude Code; limited Claude Code → Zed capabilities
+### MCP Tools Available
+The following tools are exposed to Claude Code CLI:
+- `getCurrentSelection` - Get the current text selection in the active editor
+- `getLatestSelection` - Get the most recent text selection
+- `getWorkspaceFolders` - Get the workspace folders open in the IDE
+- `getDiagnostics` - Get diagnostics (errors, warnings) for files in the workspace
+
+### Limitations
+- **LSP Diagnostics**: Currently returns empty - Zed extension doesn't expose IDE diagnostic information to Claude Code CLI
+- **One-way Communication**: Primary flow is Zed to Claude Code; limited Claude Code to Zed capabilities
+- **IDE-specific tools not supported**: Tools like `openFile`, `openDiff`, `saveDocument` are not available in Zed integration
 
 ## Installation
 
@@ -265,11 +277,16 @@ This project consists of two components:
 ### 2. Claude Code Server (`claude-code-server`)
 - **Purpose**: WebSocket server for Claude Code CLI communication
 - **Technology**: Native Rust application
+- **Code Structure**:
+  - `lsp/` - LSP server implementation (handlers, notifications, watchdog)
+  - `mcp/` - MCP protocol implementation (handlers, tools, types)
+  - `websocket.rs` - WebSocket server and client management
 - **Responsibilities**:
-  - WebSocket server on localhost
+  - WebSocket server on localhost with per-project isolation
   - Lock file management (`~/.claude/ide/[port].lock`)
-  - Authentication token handling
-  - JSON-RPC protocol implementation
+  - Selection state persistence across interactions
+  - MCP tool dispatch (selection, workspace, diagnostics)
+  - Stale connection detection and cleanup
   - Bridging between Zed extension and Claude Code CLI
 
 ## How It Works
