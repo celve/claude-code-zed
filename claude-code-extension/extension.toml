@@ -4,7 +4,7 @@ version = "0.1.0"
 schema_version = 1
 authors = ["isomo <jiahaoxiang2000@gmail.com>"]
 description = "Integration with Claude Code CLI for AI-assisted coding in Zed"
-repository = "https://github.com/jiahaoxiang2000/claude-code-zed"
+repository = "https://github.com/celve/claude-code-zed"
 
 # Development configuration
 [development]
@@ -16,30 +16,110 @@ force_development_mode = false
 [language_servers.claude-code-server]
 name = "Claude Code Server"
 languages = [
+    # Systems programming
     "Rust",
-    "Ruby",
+    "C",
+    "C++",
+    "Go",
+    "Zig",
+    # Web development
     "JavaScript",
     "TypeScript",
     "TSX",
+    "HTML",
+    "CSS",
+    "SCSS",
+    "Vue",
+    "Svelte",
+    # Backend / scripting
     "Python",
+    "Ruby",
+    "PHP",
+    "Perl",
+    "Lua",
+    "Shell",
+    "Fish",
+    # JVM languages
+    "Java",
+    "Kotlin",
+    "Scala",
+    "Clojure",
+    # Functional
+    "Elixir",
+    "Erlang",
+    "Haskell",
+    "OCaml",
+    "F#",
+    # Mobile
+    "Swift",
+    "Dart",
+    # Config / data
+    "JSON",
+    "YAML",
+    "TOML",
+    "XML",
+    # Documentation
     "Markdown",
     "LaTeX",
     "Typst",
-    "Elixir",
-    "Erlang",
-    "Kotlin",
+    # Other
+    "SQL",
+    "GraphQL",
+    "Dockerfile",
+    "Makefile",
+    "Protobuf",
 ]
 
 [language_servers.claude-code-server.language_ids]
+# Systems programming
 "Rust" = "rust"
-"Ruby" = "ruby"
+"C" = "c"
+"C++" = "cpp"
+"Go" = "go"
+"Zig" = "zig"
+# Web development
 "JavaScript" = "javascript"
 "TypeScript" = "typescript"
 "TSX" = "tsx"
+"HTML" = "html"
+"CSS" = "css"
+"SCSS" = "scss"
+"Vue" = "vue"
+"Svelte" = "svelte"
+# Backend / scripting
 "Python" = "python"
+"Ruby" = "ruby"
+"PHP" = "php"
+"Perl" = "perl"
+"Lua" = "lua"
+"Shell" = "shellscript"
+"Fish" = "fish"
+# JVM languages
+"Java" = "java"
+"Kotlin" = "kotlin"
+"Scala" = "scala"
+"Clojure" = "clojure"
+# Functional
+"Elixir" = "elixir"
+"Erlang" = "erlang"
+"Haskell" = "haskell"
+"OCaml" = "ocaml"
+"F#" = "fsharp"
+# Mobile
+"Swift" = "swift"
+"Dart" = "dart"
+# Config / data
+"JSON" = "json"
+"YAML" = "yaml"
+"TOML" = "toml"
+"XML" = "xml"
+# Documentation
 "Markdown" = "markdown"
 "LaTeX" = "latex"
 "Typst" = "typst"
-"Elixir" = "elixir"
-"Erlang" = "erlang"
-"Kotlin" = "kotlin"
+# Other
+"SQL" = "sql"
+"GraphQL" = "graphql"
+"Dockerfile" = "dockerfile"
+"Makefile" = "makefile"
+"Protobuf" = "protobuf"
