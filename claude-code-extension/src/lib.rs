@@ -230,7 +230,7 @@ fn download_server_binary() -> Result<String, String> {
         return Ok(versioned_binary_name);
     }
 
-    // Check for and clean up old versions
+    // Check for and clean up old versions (with version suffix)
     if let Some(old_binary) = find_existing_binary(&binary_prefix) {
         eprintln!("🔄 [INFO] Found old version: {}, will update to {}", old_binary, release.version);
         if let Err(e) = std::fs::remove_file(&old_binary) {
@@ -238,8 +238,26 @@ fn download_server_binary() -> Result<String, String> {
         } else {
             eprintln!("🗑️ [INFO] Removed old binary: {}", old_binary);
         }
-    } else {
-        eprintln!("📥 [INFO] No existing binary found, will download");
+    }
+
+    // Also clean up legacy non-versioned binary (from old code before version embedding)
+    if std::path::Path::new(&binary_prefix).exists() {
+        eprintln!("🔄 [INFO] Found legacy non-versioned binary: {}", binary_prefix);
+        if let Err(e) = std::fs::remove_file(&binary_prefix) {
+            eprintln!("⚠️ [WARNING] Failed to remove legacy binary {}: {}", binary_prefix, e);
+        } else {
+            eprintln!("🗑️ [INFO] Removed legacy binary: {}", binary_prefix);
+        }
+    }
+
+    // Clean up legacy version file (from old code that used separate version tracking)
+    const LEGACY_VERSION_FILE: &str = ".claude-code-server-version";
+    if std::path::Path::new(LEGACY_VERSION_FILE).exists() {
+        if let Err(e) = std::fs::remove_file(LEGACY_VERSION_FILE) {
+            eprintln!("⚠️ [WARNING] Failed to remove legacy version file: {}", e);
+        } else {
+            eprintln!("🗑️ [INFO] Removed legacy version file: {}", LEGACY_VERSION_FILE);
+        }
     }
 
     // Log all available assets for debugging
