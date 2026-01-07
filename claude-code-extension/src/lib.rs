@@ -230,23 +230,13 @@ fn download_server_binary() -> Result<String, String> {
         return Ok(versioned_binary_name);
     }
 
-    // Check for and clean up old versions (with version suffix)
-    if let Some(old_binary) = find_existing_binary(&binary_prefix) {
-        eprintln!("🔄 [INFO] Found old version: {}, will update to {}", old_binary, release.version);
+    // Clean up any existing binaries (old versioned or legacy non-versioned)
+    for old_binary in find_existing_binaries(&binary_prefix) {
+        eprintln!("🔄 [INFO] Found old binary: {}, will update to {}", old_binary, release.version);
         if let Err(e) = std::fs::remove_file(&old_binary) {
             eprintln!("⚠️ [WARNING] Failed to remove old binary {}: {}", old_binary, e);
         } else {
             eprintln!("🗑️ [INFO] Removed old binary: {}", old_binary);
-        }
-    }
-
-    // Also clean up legacy non-versioned binary (from old code before version embedding)
-    if std::path::Path::new(&binary_prefix).exists() {
-        eprintln!("🔄 [INFO] Found legacy non-versioned binary: {}", binary_prefix);
-        if let Err(e) = std::fs::remove_file(&binary_prefix) {
-            eprintln!("⚠️ [WARNING] Failed to remove legacy binary {}: {}", binary_prefix, e);
-        } else {
-            eprintln!("🗑️ [INFO] Removed legacy binary: {}", binary_prefix);
         }
     }
 
@@ -317,26 +307,34 @@ fn get_platform_binary_prefix() -> Result<String, String> {
     }
 }
 
-/// Find an existing binary that matches the prefix pattern
-/// Returns the filename if found (e.g., "claude-code-server-macos-aarch64-v0.1.0")
-fn find_existing_binary(prefix: &str) -> Option<String> {
-    // Read current directory entries
-    let entries = std::fs::read_dir(".").ok()?;
+/// Find all existing binaries that match the prefix pattern
+/// Returns filenames for both versioned (e.g., "claude-code-server-macos-aarch64-v0.1.0")
+/// and legacy non-versioned (e.g., "claude-code-server-macos-aarch64") binaries
+fn find_existing_binaries(prefix: &str) -> Vec<String> {
+    let mut binaries = Vec::new();
 
-    for entry in entries.flatten() {
-        let filename = entry.file_name().to_string_lossy().to_string();
-        // Match files that start with prefix and have a version suffix (e.g., "-v0.1.0")
-        if filename.starts_with(prefix) && filename.len() > prefix.len() {
-            let suffix = &filename[prefix.len()..];
-            // Check if suffix looks like a version (starts with "-v")
-            if suffix.starts_with("-v") {
-                eprintln!("🔍 [DEBUG] Found existing binary: {}", filename);
-                return Some(filename);
+    // Check for legacy non-versioned binary (exact match)
+    if std::path::Path::new(prefix).exists() {
+        eprintln!("🔍 [DEBUG] Found legacy binary: {}", prefix);
+        binaries.push(prefix.to_string());
+    }
+
+    // Check for versioned binaries
+    if let Ok(entries) = std::fs::read_dir(".") {
+        for entry in entries.flatten() {
+            let filename = entry.file_name().to_string_lossy().to_string();
+            // Match files that start with prefix and have a version suffix (e.g., "-v0.1.0")
+            if filename.starts_with(prefix) && filename.len() > prefix.len() {
+                let suffix = &filename[prefix.len()..];
+                if suffix.starts_with("-v") {
+                    eprintln!("🔍 [DEBUG] Found versioned binary: {}", filename);
+                    binaries.push(filename);
+                }
             }
         }
     }
 
-    None
+    binaries
 }
 
 zed_extension_api::register_extension!(ClaudeCodeExtension);
