@@ -9,9 +9,6 @@ use zed_extension_api::{
 // DEFAULT: false (production behavior - downloads from GitHub)
 const FORCE_DEVELOPMENT_MODE: bool = false;
 
-// Version file name to track installed binary version
-const VERSION_FILE: &str = ".claude-code-server-version";
-
 struct ClaudeCodeExtension;
 
 impl Extension for ClaudeCodeExtension {
@@ -151,7 +148,7 @@ fn find_server_binary(worktree: &Worktree) -> Result<String, String> {
         // Check for manually copied development binary in extension work directory
         // This allows developers to use their local build with fixes
         let dev_binary_name =
-            get_platform_binary_name().unwrap_or("claude-code-server".to_string());
+            get_platform_binary_prefix().unwrap_or("claude-code-server".to_string());
         eprintln!(
             "🔍 [DEBUG] Looking for development binary: {}",
             dev_binary_name
@@ -183,28 +180,24 @@ fn find_server_binary(worktree: &Worktree) -> Result<String, String> {
 }
 
 /// Download claude-code-server binary from GitHub releases
+/// Binary naming format: claude-code-server-<platform>-<version>
+/// e.g., claude-code-server-macos-aarch64-v0.1.0
 fn download_server_binary() -> Result<String, String> {
     const GITHUB_REPO: &str = "celve/claude-code-zed";
 
-    // Determine platform-specific binary name
-    let binary_name = match get_platform_binary_name() {
+    // Determine platform-specific binary prefix (without version)
+    let binary_prefix = match get_platform_binary_prefix() {
         Ok(name) => {
-            eprintln!("🔍 [DEBUG] Platform binary name: {}", name);
+            eprintln!("🔍 [DEBUG] Platform binary prefix: {}", name);
             name
         }
         Err(e) => {
-            eprintln!("❌ [ERROR] Failed to determine platform binary name: {}", e);
+            eprintln!("❌ [ERROR] Failed to determine platform binary prefix: {}", e);
             return Err(e);
         }
     };
 
-    let binary_exists = std::path::Path::new(&binary_name).exists();
-    let local_version = read_local_version();
-
-    eprintln!("🔍 [DEBUG] Binary exists: {}", binary_exists);
-    eprintln!("🔍 [DEBUG] Local version: {:?}", local_version);
-
-    // Get the latest release from GitHub to check version
+    // Get the latest release from GitHub
     eprintln!("🔍 [DEBUG] Fetching latest release from GitHub repo: {}", GITHUB_REPO);
     let release = latest_github_release(
         GITHUB_REPO,
@@ -224,37 +217,29 @@ fn download_server_binary() -> Result<String, String> {
         release.assets.len()
     );
 
-    // Check if we need to download/update
-    let needs_download = if !binary_exists {
-        eprintln!("📥 [INFO] Binary not found, will download");
-        true
-    } else if let Some(ref local_ver) = local_version {
-        if is_newer_version(local_ver, &release.version) {
-            eprintln!(
-                "🔄 [INFO] Update available: {} -> {}",
-                local_ver, release.version
-            );
-            true
-        } else {
-            eprintln!(
-                "✅ [INFO] Binary is up to date (local: {}, remote: {})",
-                local_ver, release.version
-            );
-            false
-        }
-    } else {
-        // Binary exists but no version file - assume it needs update to track version
-        eprintln!("⚠️ [INFO] No version file found, will re-download to track version");
-        true
-    };
+    // Expected binary name with version included
+    let versioned_binary_name = format!("{}-{}", binary_prefix, release.version);
+    eprintln!("🔍 [DEBUG] Expected versioned binary: {}", versioned_binary_name);
 
-    // If binary is up to date, use it
-    if !needs_download {
-        eprintln!("✅ [SUCCESS] Using existing binary: {}", binary_name);
-        if let Err(e) = make_file_executable(&binary_name) {
+    // Check if we already have this exact version
+    if std::path::Path::new(&versioned_binary_name).exists() {
+        eprintln!("✅ [INFO] Binary {} is up to date", versioned_binary_name);
+        if let Err(e) = make_file_executable(&versioned_binary_name) {
             eprintln!("⚠️ [WARNING] Failed to make binary executable: {}", e);
         }
-        return Ok(binary_name);
+        return Ok(versioned_binary_name);
+    }
+
+    // Check for and clean up old versions
+    if let Some(old_binary) = find_existing_binary(&binary_prefix) {
+        eprintln!("🔄 [INFO] Found old version: {}, will update to {}", old_binary, release.version);
+        if let Err(e) = std::fs::remove_file(&old_binary) {
+            eprintln!("⚠️ [WARNING] Failed to remove old binary {}: {}", old_binary, e);
+        } else {
+            eprintln!("🗑️ [INFO] Removed old binary: {}", old_binary);
+        }
+    } else {
+        eprintln!("📥 [INFO] No existing binary found, will download");
     }
 
     // Log all available assets for debugging
@@ -263,48 +248,40 @@ fn download_server_binary() -> Result<String, String> {
         eprintln!("  - {}", asset.name);
     }
 
-    // Find the asset that matches our platform
+    // Find the asset that matches our platform (GitHub releases use non-versioned names)
     let asset = release
         .assets
         .iter()
-        .find(|asset| asset.name == binary_name)
+        .find(|asset| asset.name == binary_prefix)
         .ok_or_else(|| {
-            eprintln!("❌ [ERROR] Asset {} not found in release", binary_name);
-            eprintln!("🔍 [DEBUG] Looking for asset matching: {}", binary_name);
-            format!("Asset {} not found in release", binary_name)
+            eprintln!("❌ [ERROR] Asset {} not found in release", binary_prefix);
+            eprintln!("🔍 [DEBUG] Looking for asset matching: {}", binary_prefix);
+            format!("Asset {} not found in release", binary_prefix)
         })?;
 
     eprintln!("✅ [SUCCESS] Found matching asset: {}", asset.name);
     eprintln!("🔍 [DEBUG] Download URL: {}", asset.download_url);
 
-    // Download the binary to the extension's working directory
-    let local_path = binary_name.clone();
-    eprintln!("🔍 [DEBUG] Downloading to local path: {}", local_path);
+    // Download to versioned filename
+    eprintln!("🔍 [DEBUG] Downloading to: {}", versioned_binary_name);
 
     match download_file(
         &asset.download_url,
-        &local_path,
+        &versioned_binary_name,
         DownloadedFileType::Uncompressed,
     ) {
         Ok(_) => {
-            eprintln!("✅ [SUCCESS] Binary downloaded to: {}", local_path);
+            eprintln!("✅ [SUCCESS] Binary downloaded to: {}", versioned_binary_name);
 
             // Make the binary executable
-            eprintln!("🔍 [DEBUG] Making binary executable: {}", local_path);
-            make_file_executable(&local_path).map_err(|e| {
+            eprintln!("🔍 [DEBUG] Making binary executable: {}", versioned_binary_name);
+            make_file_executable(&versioned_binary_name).map_err(|e| {
                 eprintln!("❌ [ERROR] Failed to make binary executable: {}", e);
                 format!("Failed to make binary executable: {}", e)
             })?;
 
-            // Save the version for future comparisons
-            if let Err(e) = write_local_version(&release.version) {
-                eprintln!("⚠️ [WARNING] Failed to save version file: {}", e);
-            } else {
-                eprintln!("✅ [SUCCESS] Version {} saved to {}", release.version, VERSION_FILE);
-            }
-
-            eprintln!("✅ [SUCCESS] Binary is now executable");
-            Ok(local_path)
+            eprintln!("✅ [SUCCESS] Binary {} is ready", versioned_binary_name);
+            Ok(versioned_binary_name)
         }
         Err(e) => {
             eprintln!("❌ [ERROR] Failed to download binary: {}", e);
@@ -317,8 +294,9 @@ fn download_server_binary() -> Result<String, String> {
     }
 }
 
-/// Get platform-specific binary name for GitHub releases
-fn get_platform_binary_name() -> Result<String, String> {
+/// Get platform-specific binary prefix for GitHub releases (without version)
+/// e.g., "claude-code-server-macos-aarch64"
+fn get_platform_binary_prefix() -> Result<String, String> {
     // Use Zed's platform detection instead of env::consts which returns wasm32
     let (os, arch) = current_platform();
 
@@ -331,49 +309,26 @@ fn get_platform_binary_name() -> Result<String, String> {
     }
 }
 
-/// Read the locally stored version from the version file
-fn read_local_version() -> Option<String> {
-    std::fs::read_to_string(VERSION_FILE)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
+/// Find an existing binary that matches the prefix pattern
+/// Returns the filename if found (e.g., "claude-code-server-macos-aarch64-v0.1.0")
+fn find_existing_binary(prefix: &str) -> Option<String> {
+    // Read current directory entries
+    let entries = std::fs::read_dir(".").ok()?;
 
-/// Write the version to the version file
-fn write_local_version(version: &str) -> Result<(), String> {
-    std::fs::write(VERSION_FILE, version).map_err(|e| format!("Failed to write version file: {}", e))
-}
-
-/// Compare two semver-like version strings (e.g., "v0.1.0" vs "v0.2.0")
-/// Returns true if remote_version is newer than local_version
-fn is_newer_version(local_version: &str, remote_version: &str) -> bool {
-    // Strip 'v' prefix if present for comparison
-    let local = local_version.trim_start_matches('v');
-    let remote = remote_version.trim_start_matches('v');
-
-    // Parse version components
-    let parse_version = |v: &str| -> Vec<u32> {
-        v.split('.')
-            .filter_map(|s| s.parse::<u32>().ok())
-            .collect()
-    };
-
-    let local_parts = parse_version(local);
-    let remote_parts = parse_version(remote);
-
-    // Compare component by component
-    for i in 0..std::cmp::max(local_parts.len(), remote_parts.len()) {
-        let local_num = local_parts.get(i).copied().unwrap_or(0);
-        let remote_num = remote_parts.get(i).copied().unwrap_or(0);
-
-        if remote_num > local_num {
-            return true;
-        } else if remote_num < local_num {
-            return false;
+    for entry in entries.flatten() {
+        let filename = entry.file_name().to_string_lossy().to_string();
+        // Match files that start with prefix and have a version suffix (e.g., "-v0.1.0")
+        if filename.starts_with(prefix) && filename.len() > prefix.len() {
+            let suffix = &filename[prefix.len()..];
+            // Check if suffix looks like a version (starts with "-v")
+            if suffix.starts_with("-v") {
+                eprintln!("🔍 [DEBUG] Found existing binary: {}", filename);
+                return Some(filename);
+            }
         }
     }
 
-    false // Versions are equal
+    None
 }
 
 zed_extension_api::register_extension!(ClaudeCodeExtension);
