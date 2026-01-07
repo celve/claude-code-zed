@@ -250,16 +250,6 @@ fn download_server_binary() -> Result<String, String> {
         }
     }
 
-    // Clean up legacy version file (from old code that used separate version tracking)
-    const LEGACY_VERSION_FILE: &str = ".claude-code-server-version";
-    if std::path::Path::new(LEGACY_VERSION_FILE).exists() {
-        if let Err(e) = std::fs::remove_file(LEGACY_VERSION_FILE) {
-            eprintln!("⚠️ [WARNING] Failed to remove legacy version file: {}", e);
-        } else {
-            eprintln!("🗑️ [INFO] Removed legacy version file: {}", LEGACY_VERSION_FILE);
-        }
-    }
-
     // Log all available assets for debugging
     eprintln!("🔍 [DEBUG] Available assets:");
     for asset in &release.assets {
