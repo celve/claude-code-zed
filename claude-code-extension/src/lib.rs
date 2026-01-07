@@ -9,6 +9,9 @@ use zed_extension_api::{
 // DEFAULT: false (production behavior - downloads from GitHub)
 const FORCE_DEVELOPMENT_MODE: bool = false;
 
+// Version file name to track installed binary version
+const VERSION_FILE: &str = ".claude-code-server-version";
+
 struct ClaudeCodeExtension;
 
 impl Extension for ClaudeCodeExtension {
@@ -195,26 +198,14 @@ fn download_server_binary() -> Result<String, String> {
         }
     };
 
-    // Check if binary already exists (from manual copy in development)
-    if std::path::Path::new(&binary_name).exists() {
-        eprintln!("✅ [SUCCESS] Found existing binary: {}", binary_name);
-        eprintln!("🔧 [INFO] Using manually copied development binary");
+    let binary_exists = std::path::Path::new(&binary_name).exists();
+    let local_version = read_local_version();
 
-        // Make sure it's executable
-        if let Err(e) = make_file_executable(&binary_name) {
-            eprintln!("⚠️ [WARNING] Failed to make binary executable: {}", e);
-        }
+    eprintln!("🔍 [DEBUG] Binary exists: {}", binary_exists);
+    eprintln!("🔍 [DEBUG] Local version: {:?}", local_version);
 
-        return Ok(binary_name);
-    }
-
-    eprintln!("🔍 [DEBUG] Starting GitHub release download process");
-
-    // Get the latest release from GitHub
-    eprintln!(
-        "🔍 [DEBUG] Fetching latest release from GitHub repo: {}",
-        GITHUB_REPO
-    );
+    // Get the latest release from GitHub to check version
+    eprintln!("🔍 [DEBUG] Fetching latest release from GitHub repo: {}", GITHUB_REPO);
     let release = latest_github_release(
         GITHUB_REPO,
         GithubReleaseOptions {
@@ -232,6 +223,39 @@ fn download_server_binary() -> Result<String, String> {
         release.version,
         release.assets.len()
     );
+
+    // Check if we need to download/update
+    let needs_download = if !binary_exists {
+        eprintln!("📥 [INFO] Binary not found, will download");
+        true
+    } else if let Some(ref local_ver) = local_version {
+        if is_newer_version(local_ver, &release.version) {
+            eprintln!(
+                "🔄 [INFO] Update available: {} -> {}",
+                local_ver, release.version
+            );
+            true
+        } else {
+            eprintln!(
+                "✅ [INFO] Binary is up to date (local: {}, remote: {})",
+                local_ver, release.version
+            );
+            false
+        }
+    } else {
+        // Binary exists but no version file - assume it needs update to track version
+        eprintln!("⚠️ [INFO] No version file found, will re-download to track version");
+        true
+    };
+
+    // If binary is up to date, use it
+    if !needs_download {
+        eprintln!("✅ [SUCCESS] Using existing binary: {}", binary_name);
+        if let Err(e) = make_file_executable(&binary_name) {
+            eprintln!("⚠️ [WARNING] Failed to make binary executable: {}", e);
+        }
+        return Ok(binary_name);
+    }
 
     // Log all available assets for debugging
     eprintln!("🔍 [DEBUG] Available assets:");
@@ -272,6 +296,13 @@ fn download_server_binary() -> Result<String, String> {
                 format!("Failed to make binary executable: {}", e)
             })?;
 
+            // Save the version for future comparisons
+            if let Err(e) = write_local_version(&release.version) {
+                eprintln!("⚠️ [WARNING] Failed to save version file: {}", e);
+            } else {
+                eprintln!("✅ [SUCCESS] Version {} saved to {}", release.version, VERSION_FILE);
+            }
+
             eprintln!("✅ [SUCCESS] Binary is now executable");
             Ok(local_path)
         }
@@ -298,6 +329,51 @@ fn get_platform_binary_name() -> Result<String, String> {
         (Os::Windows, _) => Err("Windows is not currently supported".to_string()),
         (os, arch) => Err(format!("Unsupported platform: {:?}-{:?}", os, arch)),
     }
+}
+
+/// Read the locally stored version from the version file
+fn read_local_version() -> Option<String> {
+    std::fs::read_to_string(VERSION_FILE)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Write the version to the version file
+fn write_local_version(version: &str) -> Result<(), String> {
+    std::fs::write(VERSION_FILE, version).map_err(|e| format!("Failed to write version file: {}", e))
+}
+
+/// Compare two semver-like version strings (e.g., "v0.1.0" vs "v0.2.0")
+/// Returns true if remote_version is newer than local_version
+fn is_newer_version(local_version: &str, remote_version: &str) -> bool {
+    // Strip 'v' prefix if present for comparison
+    let local = local_version.trim_start_matches('v');
+    let remote = remote_version.trim_start_matches('v');
+
+    // Parse version components
+    let parse_version = |v: &str| -> Vec<u32> {
+        v.split('.')
+            .filter_map(|s| s.parse::<u32>().ok())
+            .collect()
+    };
+
+    let local_parts = parse_version(local);
+    let remote_parts = parse_version(remote);
+
+    // Compare component by component
+    for i in 0..std::cmp::max(local_parts.len(), remote_parts.len()) {
+        let local_num = local_parts.get(i).copied().unwrap_or(0);
+        let remote_num = remote_parts.get(i).copied().unwrap_or(0);
+
+        if remote_num > local_num {
+            return true;
+        } else if remote_num < local_num {
+            return false;
+        }
+    }
+
+    false // Versions are equal
 }
 
 zed_extension_api::register_extension!(ClaudeCodeExtension);
