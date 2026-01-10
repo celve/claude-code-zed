@@ -197,19 +197,30 @@ fn download_server_binary() -> Result<String, String> {
         }
     };
 
-    // Get the latest release from GitHub
+    // Try to get the latest release from GitHub
     eprintln!("🔍 [DEBUG] Fetching latest release from GitHub repo: {}", GITHUB_REPO);
-    let release = latest_github_release(
+    let release = match latest_github_release(
         GITHUB_REPO,
         GithubReleaseOptions {
             require_assets: true,
             pre_release: false,
         },
-    )
-    .map_err(|e| {
-        eprintln!("❌ [ERROR] Failed to fetch GitHub release: {}", e);
-        format!("Failed to get latest release: {}", e)
-    })?;
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("⚠️ [WARNING] Failed to fetch GitHub release: {}", e);
+            // Offline fallback: try to find any existing versioned binary
+            let existing = find_existing_binaries(&binary_prefix);
+            if let Some(binary) = existing.into_iter().find(|b| b.contains("-v")) {
+                eprintln!("🔄 [FALLBACK] Using cached binary: {}", binary);
+                if let Err(e) = make_file_executable(&binary) {
+                    eprintln!("⚠️ [WARNING] Failed to make binary executable: {}", e);
+                }
+                return Ok(binary);
+            }
+            return Err(format!("Failed to get latest release and no cached binary: {}", e));
+        }
+    };
 
     eprintln!(
         "📥 [INFO] Found release {} with {} assets",
@@ -228,16 +239,6 @@ fn download_server_binary() -> Result<String, String> {
             eprintln!("⚠️ [WARNING] Failed to make binary executable: {}", e);
         }
         return Ok(versioned_binary_name);
-    }
-
-    // Clean up any existing binaries (old versioned or legacy non-versioned)
-    for old_binary in find_existing_binaries(&binary_prefix) {
-        eprintln!("🔄 [INFO] Found old binary: {}, will update to {}", old_binary, release.version);
-        if let Err(e) = std::fs::remove_file(&old_binary) {
-            eprintln!("⚠️ [WARNING] Failed to remove old binary {}: {}", old_binary, e);
-        } else {
-            eprintln!("🗑️ [INFO] Removed old binary: {}", old_binary);
-        }
     }
 
     // Log all available assets for debugging
@@ -278,6 +279,14 @@ fn download_server_binary() -> Result<String, String> {
                 format!("Failed to make binary executable: {}", e)
             })?;
 
+            // Clean up old binaries only AFTER successful download
+            for old_binary in find_existing_binaries(&binary_prefix) {
+                if old_binary != versioned_binary_name {
+                    eprintln!("🗑️ [INFO] Removing old binary: {}", old_binary);
+                    let _ = std::fs::remove_file(&old_binary);
+                }
+            }
+
             eprintln!("✅ [SUCCESS] Binary {} is ready", versioned_binary_name);
             Ok(versioned_binary_name)
         }
@@ -285,7 +294,12 @@ fn download_server_binary() -> Result<String, String> {
             eprintln!("❌ [ERROR] Failed to download binary: {}", e);
             eprintln!("🔍 [DEBUG] Download error details: {}", e);
 
-            // Fallback to system PATH
+            // Fallback: try existing binary first, then system PATH
+            let existing = find_existing_binaries(&binary_prefix);
+            if let Some(binary) = existing.into_iter().next() {
+                eprintln!("🔄 [FALLBACK] Using existing binary: {}", binary);
+                return Ok(binary);
+            }
             eprintln!("🔄 [FALLBACK] Using system binary: claude-code-server");
             Ok("claude-code-server".to_string())
         }
