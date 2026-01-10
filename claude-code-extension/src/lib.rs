@@ -261,25 +261,46 @@ fn download_server_binary() -> Result<String, String> {
     eprintln!("✅ [SUCCESS] Found matching asset: {}", asset.name);
     eprintln!("🔍 [DEBUG] Download URL: {}", asset.download_url);
 
-    // Download to versioned filename
-    eprintln!("🔍 [DEBUG] Downloading to: {}", versioned_binary_name);
+    // Download to temp file first to preserve existing binary until success
+    let temp_binary_name = format!("{}.downloading", versioned_binary_name);
+    eprintln!("🔍 [DEBUG] Downloading to temp file: {}", temp_binary_name);
 
     match download_file(
         &asset.download_url,
-        &versioned_binary_name,
+        &temp_binary_name,
         DownloadedFileType::Uncompressed,
     ) {
         Ok(_) => {
-            eprintln!("✅ [SUCCESS] Binary downloaded to: {}", versioned_binary_name);
+            eprintln!("✅ [SUCCESS] Binary downloaded to temp file: {}", temp_binary_name);
 
             // Make the binary executable
-            eprintln!("🔍 [DEBUG] Making binary executable: {}", versioned_binary_name);
-            make_file_executable(&versioned_binary_name).map_err(|e| {
+            eprintln!("🔍 [DEBUG] Making binary executable: {}", temp_binary_name);
+            if let Err(e) = make_file_executable(&temp_binary_name) {
                 eprintln!("❌ [ERROR] Failed to make binary executable: {}", e);
-                format!("Failed to make binary executable: {}", e)
-            })?;
+                let _ = std::fs::remove_file(&temp_binary_name);
+                // Fallback to existing binary
+                let existing = find_existing_binaries(&binary_prefix);
+                if let Some(binary) = existing.into_iter().next() {
+                    eprintln!("🔄 [FALLBACK] Using existing binary: {}", binary);
+                    return Ok(binary);
+                }
+                return Err(format!("Failed to make binary executable: {}", e));
+            }
 
-            // Clean up old binaries only AFTER successful download
+            // Rename temp file to final name (atomic on most filesystems)
+            if let Err(e) = std::fs::rename(&temp_binary_name, &versioned_binary_name) {
+                eprintln!("❌ [ERROR] Failed to rename binary: {}", e);
+                let _ = std::fs::remove_file(&temp_binary_name);
+                // Fallback to existing binary
+                let existing = find_existing_binaries(&binary_prefix);
+                if let Some(binary) = existing.into_iter().next() {
+                    eprintln!("🔄 [FALLBACK] Using existing binary: {}", binary);
+                    return Ok(binary);
+                }
+                return Err(format!("Failed to rename binary: {}", e));
+            }
+
+            // Clean up old binaries only AFTER successful download and rename
             for old_binary in find_existing_binaries(&binary_prefix) {
                 if old_binary != versioned_binary_name {
                     eprintln!("🗑️ [INFO] Removing old binary: {}", old_binary);
@@ -293,6 +314,8 @@ fn download_server_binary() -> Result<String, String> {
         Err(e) => {
             eprintln!("❌ [ERROR] Failed to download binary: {}", e);
             eprintln!("🔍 [DEBUG] Download error details: {}", e);
+            // Clean up partial download if any
+            let _ = std::fs::remove_file(&temp_binary_name);
 
             // Fallback: try existing binary first, then system PATH
             let existing = find_existing_binaries(&binary_prefix);
