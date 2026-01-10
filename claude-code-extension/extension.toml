@@ -16,6 +16,8 @@ force_development_mode = false
 [language_servers.claude-code-server]
 name = "Claude Code Server"
 languages = [
+    # Common files (for early activation)
+    "Plain Text",
     # Systems programming
     "Rust",
     "C",
@@ -71,6 +73,8 @@ languages = [
 ]
 
 [language_servers.claude-code-server.language_ids]
+# Common files
+"Plain Text" = "plaintext"
 # Systems programming
 "Rust" = "rust"
 "C" = "c"
