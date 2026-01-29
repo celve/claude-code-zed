@@ -21,3 +21,6 @@ tracing-subscriber = { workspace = true }
 clap = { version = "4.0", features = ["derive"] }
 dirs = "5.0"
 rand = "0.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

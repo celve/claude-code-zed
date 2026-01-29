@@ -1,13 +1,13 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 mod lsp;
 mod mcp;
 mod websocket;
 
-use lsp::{run_lsp_server, run_lsp_server_with_notifications};
+use lsp::{run_lsp_server, run_lsp_server_inner};
 use websocket::{cleanup_lock_file, run_websocket_server, run_websocket_server_full};
 
 #[derive(Parser)]
@@ -120,6 +120,11 @@ async fn run_hybrid_server(port: Option<u16>, worktree: Option<PathBuf>) -> Resu
     // Create channel to receive the actual bound port from WebSocket server
     let (port_sender, port_receiver) = tokio::sync::oneshot::channel::<u16>();
 
+    // Create shutdown signal for watchdog -> main coordination
+    // The watchdog signals this when it detects parent process death,
+    // allowing us to clean up lock files before exiting.
+    let (shutdown_sender, mut shutdown_receiver) = tokio::sync::watch::channel(false);
+
     // In hybrid mode, we run both servers with notification bridge
     let websocket_handle = tokio::spawn(run_websocket_server_full(
         port,
@@ -127,9 +132,10 @@ async fn run_hybrid_server(port: Option<u16>, worktree: Option<PathBuf>) -> Resu
         Some(notification_receiver),
         Some(port_sender),
     ));
-    let lsp_handle = tokio::spawn(run_lsp_server_with_notifications(
+    let lsp_handle = tokio::spawn(run_lsp_server_inner(
         worktree,
         Some(notification_sender),
+        Some(shutdown_sender),
     ));
 
     // Wait to receive the actual port from WebSocket server
@@ -138,7 +144,7 @@ async fn run_hybrid_server(port: Option<u16>, worktree: Option<PathBuf>) -> Resu
         info!("WebSocket server bound to port {}", p);
     }
 
-    // Wait for either to complete (or fail)
+    // Wait for any component to complete (or fail), or for watchdog shutdown signal
     tokio::select! {
         result = websocket_handle => {
             match result {
@@ -153,14 +159,19 @@ async fn run_hybrid_server(port: Option<u16>, worktree: Option<PathBuf>) -> Resu
                 Ok(Err(e)) => error!("LSP server error: {}", e),
                 Err(e) => error!("LSP server task panicked: {}", e),
             }
-
-            // LSP server exited - clean up the WebSocket server's lock file
-            if let Some(p) = actual_port {
-                info!("LSP server exited, cleaning up lock file for port {}", p);
-                if let Err(e) = cleanup_lock_file(p).await {
-                    error!("Failed to cleanup lock file: {}", e);
-                }
+        }
+        _ = shutdown_receiver.changed() => {
+            if *shutdown_receiver.borrow() {
+                warn!("Watchdog signaled shutdown - parent process died");
             }
+        }
+    }
+
+    // Always clean up the lock file regardless of which exit path was taken
+    if let Some(p) = actual_port {
+        info!("Cleaning up lock file for port {}", p);
+        if let Err(e) = cleanup_lock_file(p).await {
+            error!("Failed to cleanup lock file: {}", e);
         }
     }
 

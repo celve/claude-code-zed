@@ -17,6 +17,9 @@ use tokio_tungstenite::{
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+#[cfg(unix)]
+extern crate libc;
+
 use crate::lsp::NotificationReceiver;
 use crate::mcp::{MCPRequest, MCPResponse, MCPServer};
 use tokio::sync::oneshot;
@@ -111,6 +114,11 @@ pub async fn run_websocket_server_full(
 ) -> Result<()> {
     info!("Starting WebSocket server...");
 
+    // Clean up stale lock files from dead processes before starting
+    if let Err(e) = cleanup_stale_lock_files().await {
+        warn!("Failed to clean up stale lock files: {}", e);
+    }
+
     // Find an available port (use dynamic allocation if preferred port is unavailable)
     let (listener, actual_port) =
         find_available_port(port, DEFAULT_PORT_START, DEFAULT_PORT_END).await?;
@@ -130,13 +138,16 @@ pub async fn run_websocket_server_full(
     create_lock_file(actual_port, worktree.clone(), &auth_token).await?;
 
     // Setup graceful shutdown handler for Ctrl+C
+    // This ensures the lock file is cleaned up even when running in standalone WebSocket mode.
+    // In hybrid mode, the main function handles cleanup, but this is a safety net.
     let port_for_cleanup = actual_port;
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
-        info!("Shutdown signal received, cleaning up...");
+        info!("Shutdown signal received, cleaning up lock file for port {}...", port_for_cleanup);
         if let Err(e) = cleanup_lock_file(port_for_cleanup).await {
             error!("Error during cleanup: {}", e);
         }
+        info!("Lock file cleaned up, exiting");
         std::process::exit(0);
     });
 
@@ -175,6 +186,89 @@ pub async fn cleanup_lock_file(port: u16) -> Result<()> {
     if lock_file_path.exists() {
         info!("Removing existing lock file: {}", lock_file_path.display());
         fs::remove_file(&lock_file_path)?;
+    }
+
+    Ok(())
+}
+
+/// Check if a process with the given PID is still alive.
+#[cfg(unix)]
+fn is_process_alive(pid: u32) -> bool {
+    // kill with signal 0 checks if the process exists without sending a signal
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn is_process_alive(_pid: u32) -> bool {
+    // On non-Unix platforms, assume the process is alive (conservative)
+    true
+}
+
+/// Clean up stale lock files from dead processes.
+/// Scans all `.lock` files in `~/.claude/ide/`, checks if the PID is still alive,
+/// and removes lock files for dead processes.
+pub async fn cleanup_stale_lock_files() -> Result<()> {
+    let home = home_dir().ok_or_else(|| anyhow!("Could not find home directory"))?;
+    let claude_dir = home.join(".claude").join("ide");
+
+    if !claude_dir.exists() {
+        return Ok(());
+    }
+
+    let entries = match fs::read_dir(&claude_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            warn!("Failed to read lock file directory: {}", e);
+            return Ok(());
+        }
+    };
+
+    let current_pid = process::id();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("lock") {
+            continue;
+        }
+
+        match fs::read_to_string(&path) {
+            Ok(content) => {
+                if let Ok(lock_data) = serde_json::from_str::<LockFile>(&content) {
+                    // Don't remove our own lock file
+                    if lock_data.pid == current_pid {
+                        continue;
+                    }
+
+                    if !is_process_alive(lock_data.pid) {
+                        info!(
+                            "Removing stale lock file {} (PID {} is dead)",
+                            path.display(),
+                            lock_data.pid
+                        );
+                        if let Err(e) = fs::remove_file(&path) {
+                            warn!("Failed to remove stale lock file {}: {}", path.display(), e);
+                        }
+                    } else {
+                        debug!(
+                            "Lock file {} belongs to live process (PID {})",
+                            path.display(),
+                            lock_data.pid
+                        );
+                    }
+                } else {
+                    warn!(
+                        "Failed to parse lock file {}, removing it",
+                        path.display()
+                    );
+                    if let Err(e) = fs::remove_file(&path) {
+                        warn!("Failed to remove invalid lock file {}: {}", path.display(), e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to read lock file {}: {}", path.display(), e);
+            }
+        }
     }
 
     Ok(())
